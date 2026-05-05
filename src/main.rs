@@ -3,6 +3,7 @@
 
 
 use eframe::egui;
+// use core::time;
 use std::sync::mpsc::{self, Receiver};
 use tokio::runtime::Runtime;
 use futures::stream::{self, StreamExt};
@@ -11,6 +12,9 @@ use reqwest::header::USER_AGENT;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use eframe::icon_data::from_png_bytes;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
 enum GoodBad {
@@ -47,6 +51,7 @@ struct AppState {
     loading: bool,
     rx: Option<Receiver<Vec<PlayerResult>>>,
     rt: Runtime,
+    cache: Arc<Mutex<HashMap<String, (PlayerResult,u64)>>>,
 }
 
 impl Default for AppState {
@@ -59,6 +64,7 @@ impl Default for AppState {
             loading: false,
             rx: None,
             rt: Runtime::new().unwrap(),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -218,22 +224,24 @@ impl AppState {
         self.loading = true;
         self.results.clear();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = 
+        mpsc::channel();
         self.rx = Some(rx);
 
         let usernames = self.usernames.clone();
         let time = self.time_days.parse::<u64>().unwrap_or(0);
         let games = self.min_games.parse::<u64>().unwrap_or(0);
+        let cache = self.cache.clone();
 
         self.rt.spawn(async move {
             let client = reqwest::Client::new();
 
             let players: Vec<String> = usernames
                 .split(',')
-                .map(|s| s.trim().to_string())
+                .map(|s| s.trim().to_lowercase())
                 .collect();
 
-            let result = worker(&players, &client, &time, &games).await;
+            let result = worker(&players, &client, &time, &games, cache).await;
 
             if let Ok(r) = result {
                 let _ = tx.send(r);
@@ -275,7 +283,7 @@ async fn check_time(
 ) -> Result<(GoodBad, u64, String), String> {
     let res = client
         .get(url)
-        .header(USER_AGENT, "ChessPlayerFilter/1.0 (contact: drredx009@gmail.com)")
+        .header(USER_AGENT, "ChessPlayerFilter/0.1 (contact: None)")
         .send()
         .await
         .map_err(|e| format!("Fetch failed: {}", e))?;
@@ -379,14 +387,31 @@ async fn worker(
     client: &reqwest::Client,
     time: &u64,
     game: &u64,
+    cache: Arc<Mutex<HashMap<String, (PlayerResult, u64)>>>,
 ) -> Result<Vec<PlayerResult>, String> {
-    let results = stream::iter(players.clone())
+    let results = stream::iter(players.iter().cloned())
         .map(|p| {
             let client = client.clone();
             let time = *time;
             let game = *game;
+            let cache = cache.clone();
 
             async move {
+
+                let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+                
+                let username = p.clone();
+                if let Some((cached,time)) = cache.lock().await
+                .get(&username) {
+                    if now - time < 1800 {
+                        return cached.clone();
+                    }
+                }
+
+
                 let url1 = format!("https://api.chess.com/pub/player/{}", p);
                 let url2 = format!("https://api.chess.com/pub/player/{}/stats", p);
 
@@ -422,7 +447,7 @@ async fn worker(
                         }
                     };
 
-                PlayerResult {
+                let result = PlayerResult {
                     name: p.clone(),
                     status: player_status(t_status, g_status),
                     games,
@@ -430,7 +455,14 @@ async fn worker(
                     last_rating: current_best,
                     best_rating: best_best,
                     league: league 
-                }
+                };
+
+                cache.lock().await.insert(
+                    username,
+                    (result.clone(),now)
+                );
+
+                result
             }
         })
         .buffer_unordered(3)
