@@ -1,0 +1,28 @@
+[package]
+name = "chess-player-filter"
+version = "0.1.0"
+edition = "2024"
+description = "A simple desktop tool to analyze Chess.com player accounts"
+
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+serde_json = {version = "1.0.149", features = []}
+tokio = { version = "1", features = ["full"] }
+fltk = {version = "1.4", features = ["fltk-bundled"]}
+eframe = "0.27"
+egui = "0.27"
+futures = "0.3.32"
+sqlx = {version = "0.8.6", features = ["runtime-tokio", "sqlite", "macros"]}
+serde = "1.0.228"
+
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+
+[build-dependencies]
+winres = "0.1"
