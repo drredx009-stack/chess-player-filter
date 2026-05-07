@@ -616,7 +616,7 @@ async fn clean_db(now: u64,pool: &SqlitePool) {
     sqlx::query(
     "DELETE FROM player_cache WHERE timestamp < ?"
     )
-    .bind((now - 3600) as i64) // 1 day old
+    .bind((now - 3600) as i64)
     .execute(pool)
     .await
     .ok();
